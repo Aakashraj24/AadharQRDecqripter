@@ -6,7 +6,7 @@ import json
 import os
 
 # Telegram bot token
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+BOT_TOKEN = "7830873579:AAF5YBiR0G1S73gz-hIzBl1GU228jQ5DtZQ"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # Aadhaar QR decode function
