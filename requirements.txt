@@ -1,3 +1,5 @@
-pyTelegramBotAPI==4.12.0
-opencv-python==4.8.0
-pyzbar==0.1.9
+pyrogram 
+tgcrypto 
+yt-dlp 
+ffmpeg 
+aiohttp
