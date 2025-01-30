@@ -1,59 +1,124 @@
-import telebot
-import cv2
-import numpy as np
-from pyzbar.pyzbar import decode
-import json
 import os
+import asyncio
+import aiohttp
+import yt_dlp
+from pyrogram import Client, filters
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
-# Telegram bot token
-BOT_TOKEN = "7830873579:AAF5YBiR0G1S73gz-hIzBl1GU228jQ5DtZQ"
-bot = telebot.TeleBot(BOT_TOKEN)
+# 🔹 Bot Credentials
+API_ID = "29201763"
+API_HASH = "10d0e463862b3d0e4c2441aa70b73c8f"
+BOT_TOKEN = "7479227005:AAEHDWOhE6HI4y2MFzk14vVtoMZ_2oOV3_w"
 
-# Aadhaar QR decode function
-def decode_aadhaar_qr(image_path):
-    img = cv2.imread(image_path)
-    qr_codes = decode(img)
-    if qr_codes:
-        qr_data = qr_codes[0].data.decode("utf-8")
-        try:
-            # Try converting to JSON format
-            json_data = json.loads(qr_data)
-            return json_data
-        except json.JSONDecodeError:
-            return {"error": "QR code data is not in valid JSON format"}
-    return {"error": "No QR code detected"}
+# 🔹 Target Telegram Channel for Uploads
+TARGET_CHANNEL = "@koh_premium_bots"
 
-# Handle image messages
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
+# 🔹 Initialize Bot
+bot = Client("mpd_m3u8_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# 🔹 Store Active Downloads
+active_downloads = {}
+
+# ✅ START COMMAND
+@bot.on_message(filters.command("start"))
+async def start(client, message):
+    await message.reply_text(
+        "**🎥 MPD/M3U8 Downloader Bot**\n\n"
+        "🔹 Send me a valid **MPD/M3U8 URL** and I will download & upload it to Telegram.\n"
+        "🔹 Supports High-Speed Processing using **TG D4 Cloud**.\n"
+        "🔹 Use `/status` to check download progress.\n\n"
+        "**⚡ Powered by TG D4 Cloud**",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 Source Code", url="https://github.com/your_repo")]
+        ])
+    )
+
+# ✅ STATUS COMMAND
+@bot.on_message(filters.command("status"))
+async def check_status(client, message):
+    if not active_downloads:
+        return await message.reply_text("📭 No active downloads at the moment.")
+
+    text = "**🚀 Active Downloads:**\n\n"
+    for url, data in active_downloads.items():
+        text += f"🔹 **URL:** `{url}`\n"
+        text += f"📥 **Progress:** {data['progress']}%\n"
+        text += "--------------------\n"
+
+    await message.reply_text(text)
+
+# ✅ CANCEL COMMAND
+@bot.on_message(filters.command("cancel"))
+async def cancel_download(client, message):
+    if not active_downloads:
+        return await message.reply_text("⚠️ No active downloads to cancel.")
+
+    for url, data in active_downloads.items():
+        task = data['task']
+        task.cancel()
+        del active_downloads[url]
+
+    await message.reply_text("❌ All active downloads have been cancelled.")
+
+# ✅ HANDLE MPD/M3U8 URL
+@bot.on_message(filters.text & filters.private)
+async def handle_url(client, message):
+    url = message.text.strip()
+
+    if not url.startswith(("http://", "https://")) or not (".mpd" in url or ".m3u8" in url):
+        return await message.reply_text("❌ Invalid URL! Please send a **valid MPD or M3U8 link**.")
+
+    await message.reply_text(f"📥 **Processing URL:** `{url}`\nPlease wait...")
+
+    task = asyncio.create_task(download_and_upload(client, message, url))
+    active_downloads[url] = {"task": task, "progress": 0}
+
+# ✅ DOWNLOAD & UPLOAD FUNCTION
+async def download_and_upload(client, message, url):
     try:
-        # Download the image
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        image_path = f"{message.photo[-1].file_id}.jpg"
-        
-        # Save the image
-        with open(image_path, 'wb') as new_file:
-            new_file.write(downloaded_file)
-        
-        # Decode the QR code
-        result = decode_aadhaar_qr(image_path)
+        # 🔹 Downloading File using yt-dlp
+        download_path = f"downloads/{message.chat.id}.mp4"
+        ydl_opts = {
+            'outtmpl': download_path,
+            'format': 'bestvideo+bestaudio/best',
+            'noplaylist': True,
+            'quiet': False,
+            'progress_hooks': [lambda d: update_progress(url, d)]
+        }
 
-        # Create JSON file from result
-        json_file_path = f"{message.photo[-1].file_id}.json"
-        with open(json_file_path, 'w') as json_file:
-            json.dump(result, json_file, indent=4)
-        
-        # Send the JSON file to the user
-        with open(json_file_path, 'rb') as json_file:
-            bot.send_document(message.chat.id, json_file)
-        
-        # Clean up files (image and JSON)
-        os.remove(image_path)
-        os.remove(json_file_path)
+        async with asyncio.Semaphore(2):  # Limit parallel downloads
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+        # 🔹 Upload to Telegram using TG D4 Cloud
+        await client.send_video(
+            chat_id=TARGET_CHANNEL,
+            video=download_path,
+            caption=f"✅ **Uploaded from URL:** `{url}`",
+            progress=upload_progress
+        )
+
+        # 🔹 Cleanup
+        os.remove(download_path)
+        del active_downloads[url]
+
+        await message.reply_text(f"✅ **Successfully Uploaded to {TARGET_CHANNEL}**")
+
     except Exception as e:
-        bot.reply_to(message, f"Error: {str(e)}")
+        await message.reply_text(f"❌ **Error:** {str(e)}")
+        if url in active_downloads:
+            del active_downloads[url]
 
-# Start the bot
-print("Bot is running...")
-bot.polling()
+# ✅ PROGRESS UPDATE FUNCTION
+def update_progress(url, d):
+    if d['status'] == 'downloading':
+        active_downloads[url]['progress'] = d.get('_percent_str', '0%')
+
+# ✅ UPLOAD PROGRESS BAR
+async def upload_progress(current, total):
+    progress = (current / total) * 100
+    return f"🚀 Uploading... {progress:.2f}%"
+
+# ✅ RUN BOT
+print("🚀 Bot is Running...")
+bot.run()
